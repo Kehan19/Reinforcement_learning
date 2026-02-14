@@ -1,6 +1,9 @@
 import random
 import numpy as np
 import matplotlib.pyplot as plt
+import os
+if not os.path.exists('plots'):
+    os.makedirs('plots')
 
 
 # =====================================================================
@@ -43,7 +46,7 @@ class RiverSwim:
 
         self.R_sum = np.zeros((self.n_states, len(self.actions)))
 
-        self.R_hat = np.zeros((self.n_states, len(self.actions)))
+        self.R_hat = np.ones((self.n_states, len(self.actions)))
 
         self.V = np.zeros(self.n_states)
 
@@ -137,10 +140,16 @@ class RiverSwim:
         # Recompute ALL transition probs for this (s, a) so they sum to 1.0
         self.T_hat[self.current_state, action, :] = self.N[self.current_state, action, :] / self.N_sa[self.current_state, action]
         self.R_sum[self.current_state][action] += self.get_reward(next_state)
-        self.R_hat[self.current_state][action] = self.R_sum[self.current_state][action] / self.N_sa[self.current_state][action]
+        #self.R_hat[self.current_state][action] = self.R_sum[self.current_state][action] / self.N_sa[self.current_state][action]
 
+        
         # Reward depends on which state we land in
         reward = self.get_reward(next_state)
+
+        # Only update the reward estimate if we've actually seen a reward > 0
+        # This keeps the 'hope' (the 1.0) alive for states we haven't reached yet.
+        if reward > 0:
+            self.R_hat[self.current_state][action] = self.R_sum[self.current_state][action] / self.N_sa[self.current_state][action]
 
         self.current_state = next_state
         done = False  # non-episodic (continuing task)
@@ -246,8 +255,8 @@ class RiverSwim:
     # Training Loop: ties everything together
     # =================================================================
 
-    def train(self, n_steps=50000, epsilon_start=1.0, epsilon_end=0.05,
-              update_interval=100, early_stop_window=2000, early_stop_threshold=0.001,
+    def train(self, n_steps=500000, epsilon_start=1.0, epsilon_end=0.01,
+              update_interval=1000, early_stop_window=50000, early_stop_threshold=1e-7,
               verbose=True):
         """
         Online model-based RL training loop.
@@ -261,7 +270,21 @@ class RiverSwim:
 
         for t in range(1, n_steps + 1):
             # Decay epsilon linearly
-            epsilon = epsilon_start - (epsilon_start - epsilon_end) * (t / n_steps)
+            # 1. Set the static exploration period
+            static_period = 10000
+
+            if t <= static_period:
+                epsilon = 0.5
+            else:
+                # 2. Calculate how far we are into the decay period
+                decay_steps = n_steps - static_period
+                current_decay_step = t - static_period
+                
+                # 3. Cosine Decay Formula
+                # This decays from 0.5 down to epsilon_end
+                cosine_out = 0.5 * (1 + np.cos(np.pi * current_decay_step / decay_steps))
+                epsilon = epsilon_end + (0.5 - epsilon_end) * cosine_out
+            
 
             # 1. Choose action (epsilon-greedy)
             action = self.choose_action(epsilon)
@@ -301,7 +324,7 @@ class RiverSwim:
                 rate_previous = previous / early_stop_window
 
                 # If the rate hasn't improved significantly, stop
-                if abs(rate_recent - rate_previous) < early_stop_threshold and t > 5000:
+                if abs(rate_recent - rate_previous) < early_stop_threshold:
                     if verbose:
                         print(f"  Early stop at step {t} | "
                               f"reward rate flattened ({rate_previous:.4f} → {rate_recent:.4f})")
@@ -316,8 +339,8 @@ class RiverSwim:
 if __name__ == "__main__":
     river_lengths = [5, 10, 15, 20]   # s_1 to s_T
     n_repetitions = 5
-    max_steps = 50000
-    gamma = 0.9
+    max_steps = 1000000
+    gamma = 0.99
 
     print("=" * 60)
     print("  RiverSwim — Exercise 3: Varying River Lengths")
@@ -343,14 +366,15 @@ if __name__ == "__main__":
             history = env.train(
                 n_steps=max_steps,
                 epsilon_start=1.0,
-                epsilon_end=0.05,
-                update_interval=100,
-                early_stop_window=2000,
-                early_stop_threshold=0.001,
+                epsilon_end=0.1,
+                update_interval=1000,
+                early_stop_window=10000,
+                early_stop_threshold=1e-7,
                 verbose=True,
             )
             histories.append(history)
 
+            
             # Print final policy for this rep
             policy_str = "".join(
                 ["L" if env.pi[s] == 0 else "R" for s in env.states]
@@ -358,6 +382,13 @@ if __name__ == "__main__":
             print(f"  Final policy: [{policy_str}]  "
                   f"Steps: {len(history)}  "
                   f"Total reward: {history[-1]:.2f}")
+            
+
+            # After training is done, run one last iteration with NO randomness
+            env.policy_iteration()
+            final_policy = "".join(["L" if env.pi[s] == 0 else "R" for s in env.states])
+            print(f"The True Calculated Policy is: [{final_policy}]")
+
 
         all_results[n_states] = histories
 
@@ -408,7 +439,7 @@ if __name__ == "__main__":
     plt.tight_layout()
 
     # Save the plot
-    plot_path = '/home/kenneth/Documents/Reinforcement_learning/learning_curves.png'
+    plot_path = 'plots/learning_curves.png'
     plt.savefig(plot_path, dpi=150)
     print(f"\n  Plot saved to: {plot_path}")
     plt.show()
