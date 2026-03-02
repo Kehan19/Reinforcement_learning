@@ -27,9 +27,11 @@ class RiverSwim:
     LEFT = 0
     RIGHT = 1
 
-    def __init__(self, n_states=6, gamma=0.9):
+    def __init__(self, n_states=6, gamma=0.9, m=5):
         self.n_states = n_states
         self.current_state = 0  # start at s_1
+        self.m = m
+        self.R_max = 1.0
 
         # --- States ---
         self.states = list(range(n_states))
@@ -43,10 +45,13 @@ class RiverSwim:
         self.N_sa = np.zeros((self.n_states, len(self.actions)))
 
         self.T_hat = np.zeros((self.n_states, len(self.actions), self.n_states))
+        for s in range(self.n_states):
+            for a in range(len(self.actions)):
+                self.T_hat[s, a, s] = 1.0
 
         self.R_sum = np.zeros((self.n_states, len(self.actions)))
 
-        self.R_hat = np.ones((self.n_states, len(self.actions)))
+        self.R_hat = np.full((self.n_states, len(self.actions)), self.R_max)
 
         self.V = np.zeros(self.n_states)
 
@@ -134,26 +139,30 @@ class RiverSwim:
                 next_state = s_next
                 break
 
-        
-        self.N[self.current_state][action][next_state] += 1
-        self.N_sa[self.current_state][action] += 1
-        # Recompute ALL transition probs for this (s, a) so they sum to 1.0
-        self.T_hat[self.current_state, action, :] = self.N[self.current_state, action, :] / self.N_sa[self.current_state, action]
-        self.R_sum[self.current_state][action] += self.get_reward(next_state)
-        #self.R_hat[self.current_state][action] = self.R_sum[self.current_state][action] / self.N_sa[self.current_state][action]
+        # Only update estimates if we haven't reached the confidence threshold m
+        if self.N_sa[self.current_state][action] < self.m:
+            self.N[self.current_state][action][next_state] += 1
+            self.N_sa[self.current_state][action] += 1
+            self.R_sum[self.current_state][action] += self.get_reward(next_state)
 
+            # Check if threshold reached after this step
+            if self.N_sa[self.current_state][action] == self.m:
+                # Update reward to empirical mean
+                self.R_hat[self.current_state][action] = (
+                    self.R_sum[self.current_state][action] / self.m
+                )
+                # Update transitions to empirical distribution
+                self.T_hat[self.current_state, action, :] = (
+                    self.N[self.current_state, action, :] / self.m
+                )
         
         # Reward depends on which state we land in
         reward = self.get_reward(next_state)
 
-        # Only update the reward estimate if we've actually seen a reward > 0
-        # This keeps the 'hope' (the 1.0) alive for states we haven't reached yet.
-        if reward > 0:
-            self.R_hat[self.current_state][action] = self.R_sum[self.current_state][action] / self.N_sa[self.current_state][action]
-
+        
         self.current_state = next_state
-        done = False  # non-episodic (continuing task)
-        return next_state, reward, done
+        #done = False  # non-episodic (continuing task)
+        return next_state, reward, False
 
     # =================================================================
     # Exercise 2: Policy Iteration on the ESTIMATED MDP (T_hat, R_hat)
@@ -238,18 +247,7 @@ class RiverSwim:
     # =================================================================
 
     def choose_action(self, epsilon=0.1):
-        """
-        Epsilon-greedy behavior policy.
-
-        With probability (1 - epsilon): follow the learned policy pi(s)  (exploit)
-        With probability epsilon:       pick a random action              (explore)
-        """
-        if random.random() < epsilon:
-            # Explore: random action
-            return random.choice(self.actions)
-        else:
-            # Exploit: follow the current best policy
-            return self.pi[self.current_state]
+        return self.pi[self.current_state]
 
     # =================================================================
     # Training Loop: ties everything together
